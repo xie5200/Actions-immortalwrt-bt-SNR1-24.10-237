@@ -39,10 +39,10 @@ git clone https://github.com/jerrykuku/luci-app-argon-config.git package/luci-ap
 # git -C package/helloworld pull
 
 # mosdns
-# rm -rf feeds/packages/lang/golang
-# git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
-# rm -rf feeds/packages/net/mosdns
-# git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
+rm -rf feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
+rm -rf feeds/packages/net/mosdns
+git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
 
 # tailscale
 # sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
