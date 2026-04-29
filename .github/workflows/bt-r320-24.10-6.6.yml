@@ -1,15 +1,3 @@
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-#
-# File: .github/workflows/openwrt-bulder.yml
-# Description: Build OpenWrt using GitHub Actions
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-
 name: Build SN-R1 Immortalwrt 24.10-6.6
 
 on:
@@ -17,7 +5,9 @@ on:
   workflow_dispatch:
 
 env:
-  #REPO_URL: https://github.com/EasongChung/immortalwrt-mt798x-6.6
+  # 强制使用 Node.js 24 运行 Actions（解决 Node.js 20 弃用警告）
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
   FEEDS_CONF: feeds.conf.default
@@ -99,12 +89,24 @@ jobs:
 
       - name: Force update repo hash cache
         id: cache-repo-hash
-        uses: actions/cache@v4
+        uses: actions/cache@v4  # ✅ 升级到 v4（支持 Node.js 24）
         with:
           path: .repo-hash
           key: repo-hash_${{ steps.get-filename.outputs.filename }}_${{ needs.call-builder.outputs.repo_hash }}
-          lookup-only: true
-
-      - name: Cache repo hash
+          
+lookup-only: true
+          
+      - name: Save repo hash to cache
         if: steps.cache-repo-hash.outputs.cache-hit != 'true'
         run: echo ${{ needs.call-builder.outputs.repo_hash }} > .repo-hash
+
+      - name: Commit and push repo hash
+        if: steps.cache-repo-hash.outputs.cache-hit != 'true'
+        run: |
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          git add .repo-hash
+          git commit -m "Update repo hash cache" || echo "No changes to commit"
+          git push origin HEAD:${{ github.ref }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
