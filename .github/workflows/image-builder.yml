@@ -1,0 +1,272 @@
+name: Image Builder
+
+# 强制使用 Node.js 24 运行 Actions（解决 Node.js 20 弃用警告）
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 600
+    
+    # 接收来自调用 workflow 的参数
+    inputs:
+      repo_url:
+        required: true
+        type: string
+      repo_branch:
+        required: true
+        type: string
+      feeds_conf:
+        required: true
+        type: string
+      config_file:
+        required: true
+        type: string
+      diy_p1_sh:
+        required: true
+        type: string
+      diy_p2_sh:
+        required: true
+        type: string
+      release_file:
+        required: true
+        type: string
+      upload_bin_dir:
+        required: true
+        type: boolean
+      upload_firmware:
+        required: true
+        type: boolean
+      upload_release:
+        required: true
+        type: boolean
+      tz:
+        required: true
+        type: string
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4  # ✅ 升级到 v4（支持 Node.js 24）
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4  # ✅ 升级到 v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            gcc \
+            g++ \
+            make \
+            libncurses5-dev \
+            libncursesw5-dev \
+            zlib1g-dev \
+            gawk \
+            git \
+            gettext \
+            unzip \
+            libssl-dev \
+            wget \
+            curl \
+            xz-utils \
+            rsync \
+            file \
+            libelf-dev \
+            libdw-dev \
+            binutils \
+            python3 \
+            python3-pip \
+            python3-setuptools \
+            python3-yaml \
+            python3-dev \
+            python3-ply \
+            python3-docutils \
+            python3-pyelftools \
+            python3-jinja2 \
+            python3-software-properties \
+            python3-jsonschema
+
+      - name: Cache build dependencies
+        id: cache-deps
+        uses: actions/cache@v4  # ✅ 升级到 v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            ~/.npm
+            ~/.config/yarn
+            node_modules
+            target
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/Cargo.lock', '**/package-lock.json', '**/yarn.lock', '**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+            ${{ runner.os }}-
+
+      - name: Initialize build directory
+        run: |
+          mkdir -p openwrt
+          cd openwrt
+          
+          # 克隆仓库
+          git clone --depth=1 --branch="${{ inputs.repo_branch }}" "${{ inputs.repo_url }}" source || true
+          
+          if [ -d "source/.git" ]; then
+            cd source
+            git fetch --depth=1 origin "${{ inputs.repo_branch }}"
+            git checkout "${{ inputs.repo_branch }}"
+            cd ..
+          fi
+
+      - name: Update feeds
+        run: |
+          cd openwrt/source
+          
+          # 确保 feeds 目录存在
+          mkdir -p feeds
+          
+          # 复制 feeds 配置
+          cp ../../${{ inputs.feeds_conf }} feeds.conf.default 2>/dev/null || true
+          
+          # 如果 feeds.conf.default 不存在，使用默认配置
+          if [ ! -f feeds.conf.default ]; then
+            cat > feeds.conf.default <<'EOF'
+src-git openwrt https://git.openwrt.org/openwrt/openwrt.git
+EOF
+          fi
+          
+          # 更新 feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Apply custom configuration
+        run: |
+          cd openwrt/source
+          
+          # 应用自定义配置
+          if [ -f "../../${{ inputs.config_file }}" ]; then
+            cp "../../${{ inputs.config_file }}" .config
+          fi
+          
+          # 运行 defconfig
+          make defconfig || true
+
+      - name: Run DIY Part 1
+        if: ${{ inputs.diy_p1_sh != '' }}
+        run: |
+          cd openwrt/source
+          if [ -f "../../${{ inputs.diy_p1_sh }}" ]; then
+            bash ../../${{ inputs.diy_p1_sh }}
+          fi
+
+      - name: Run DIY Part 2
+        if: ${{ inputs.diy_p2_sh != '' }}
+        run: |
+          cd openwrt/source
+          if [ -f "../../${{ inputs.diy_p2_sh }}" ]; then
+            bash ../../${{ inputs.diy_p2_sh }}
+          fi
+
+      - name: Make menuconfig (optional)
+        run: |
+          cd openwrt/source
+          # 检查 .config 是否存在
+          if [ -f .config ]; then
+            echo ".config exists, skipping menuconfig"
+          else
+            echo "Creating default .config"
+            make defconfig
+          fi
+
+      - name: Build firmware
+        id: build
+        run: |
+          cd openwrt/source
+          
+          # 设置编译线程数
+          JOBS=$(nproc)
+          echo "Using $JOBS parallel jobs"
+          
+          # 开始编译
+          make -j$JOBS V=s
+          
+          # 检查输出目录
+          if [ -d "bin/targets/mediatek/filogic" ]; then
+            echo "Firmware built successfully!"
+            ls -la bin/targets/mediatek/filogic/
+          else
+            echo "ERROR: Firmware output directory not found!"
+            exit 1
+          fi
+
+      - name: Upload firmware artifact
+        if: ${{ inputs.upload_firmware }}
+        uses: actions/upload-artifact@v4  # ✅ 升级到 v4
+        with:
+          name: firmware-${{ github.run_id }}-${{ github.run_attempt }}
+          path: openwrt/source/bin/targets/mediatek/filogic/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload bin directory
+        if: ${{ inputs.upload_bin_dir }}
+        uses: actions/upload-artifact@v4  # ✅ 升级到 v4
+        with:
+          name: bin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: openwrt/source/bin/
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: ${{ inputs.upload_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}  # ✅ 使用高权限 PAT
+          tag_name: ${{ github.run_id }}-${{ github.run_attempt }}
+          tag_message: "Automated build ${{ github.run_id }}"
+          name: "SN-R1 ImmortalWrt ${{ github.run_id }}"
+          body_path: ${{ inputs.release_file }}
+          files: |
+            openwrt/source/bin/targets/mediatek/filogic/*
+          draft: false
+          prerelease: false
+          overwrite_files: true  # 允许覆盖同名文件
+
+      - name: Create Issue on Failure
+        if: failure()
+        uses: dacbd/create-issue-action@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}  # ✅ 修复：添加 token 参数
+          title: "Build Failed: ${{ github.run_id }}"
+          body: |
+            ❌ **OpenWrt 固件编译失败**
+            
+            **Workflow**: ${{ github.workflow }}
+            **Job**: ${{ github.job }}
+            **Step**: ${{ github.step }}
+            **Run ID**: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Commit**: ${{ github.sha }}
+            **Branch**: ${{ github.ref }}
+            **Actor**: ${{ github.actor }}
+            
+            **配置信息：**
+            - Repo: ${{ inputs.repo_url }}
+            - Branch: ${{ inputs.repo_branch }}
+            - Config: ${{ inputs.config_file }}
+            
+            请检查 Actions 日志获取详细错误信息。
+          labels: "build-failed, bug"
+          assignees: ${{ github.actor }}
+
+      - name: Cleanup old artifacts
+        if: always()
+        run: |
+          echo "Cleanup completed"
